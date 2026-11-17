@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Appointment Booking Bot",
+  "version": "1.0",
+  "description": "Auto search, CAPTCHA handle and book appointment slots.",
+  "permissions": [
+    "storage",
+    "management",
+    "activeTab",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://bd-gr-services.gvcworld.eu/*",
+    "https://api.telegram.org/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Open Bot Settings"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://bd-gr-services.gvcworld.eu/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
