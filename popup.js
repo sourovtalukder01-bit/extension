@@ -1,5 +1,4 @@
 document.addEventListener('DOMContentLoaded', () => {
-
     const typeSelect = document.getElementById('typeValue');
     const bookingForSelect = document.getElementById('bookingForValue');
     const targetDatesInput = document.getElementById('targetDates');
@@ -25,7 +24,6 @@ document.addEventListener('DOMContentLoaded', () => {
             tgChatIdInput.value = result.botData.tgChatId || "";
         }
         
-     
         if (result.isRunning) {
             statusText.innerText = "Status: Bot is RUNNING 🟢";
             statusText.style.color = "green";
@@ -35,16 +33,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-  
     startBtn.addEventListener('click', () => {
-      
         if (!targetDatesInput.value || !passportNoInput.value || !dobInput.value) {
             statusText.innerText = "Please fill in all required fields!";
             statusText.style.color = "orange";
             return;
         }
 
-   
         const botData = {
             typeValue: typeSelect.value,
             bookingForValue: bookingForSelect.value,
@@ -56,7 +51,6 @@ document.addEventListener('DOMContentLoaded', () => {
             tgChatId: tgChatIdInput.value
         };
 
-       
         chrome.storage.local.set({ 
             botData: botData, 
             isRunning: true,
@@ -64,7 +58,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }, () => {
             statusText.innerText = "Status: Bot Started Successfully! 🟢";
             statusText.style.color = "green";
-            
             
             chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
                 if (tabs[0]) {
@@ -74,7 +67,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    
     stopBtn.addEventListener('click', () => {
         chrome.storage.local.set({ isRunning: false }, () => {
             statusText.innerText = "Status: Bot STOPPED 🔴";
