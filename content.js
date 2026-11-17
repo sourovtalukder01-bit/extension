@@ -1,171 +1,13 @@
-// const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-import { resolve } from "node:dns"
-
-// async function runBot() {
-//     chrome.storage.local.get(['botData', 'isRunning'], async (res) => {
-//         if (!res.isRunning) return; 
-        
-//         console.log("Bot is Running...");
-//         const data = res.botData;
-
-//         if(!data){
-//             console.log("data not found");
-//             return;
-//         }
-
-
-//         const dobInput = document.querySelector("#gp_dateofbirth");
-
-//         if(dobInput){
-//             dobInput.value = data.dob;
-
-//             dobInput.dispatchEvent(
-//                 new Event("input",{bubbles:true})
-//             );
-
-//             dobInput.dispatchEvent(
-//                 new Event("change",{bubbles:true})
-//             )
-//         }
-//         const passwportInput = document.querySelector("#gp_passportnumber");
-
-//         if(passwportInput){
-//             passwportInput.value = data.passportNo;
-//             passwportInput.dispatchEvent(
-//                 new Event("input",{bubbles:true})
-//             );
-
-//             passwportInput.dispatchEvent(
-//                 new Event("change",{bubbles:true})
-//             )
-//         }
-
-//         await delay(1500);
-
-//         const datesArray = data.targetDates.split(',').map(d => d.trim()); 
-        
-       
-
-
-
-
-//         for (let i = 0; i < datesArray.length; i++) {
-//             let currentDate = datesArray[i];
-//             console.log(`Checking Date: ${currentDate}`);
-
-            
-//             const dateInput = document.querySelector('#datefrom'); 
-//             if(dateInput) {
-//                 dateInput.value = currentDate;
-//             }
-
-           
-//             const searchBtn = document.querySelector('#btn-search');
-//             await delay(1000)
-//             if(searchBtn) searchBtn.click();
-
-            
-//             await delay(30000); 
-
-        
-
-            
-//             const slotAvailable = document.querySelector('#resultDiv table#result tbody tr td div[div]'); 
-
-            
-//             if (slotAvailable) {
-//                 console.log(`Slot Found for ${currentDate}! Booking...`);
-                
-                
-//                 slotAvailable.click();
-//                 await delay(1000);
-                
-//                 const checkbox = document.querySelector('#submissiontext #submitinfo');
-//                 if(checkbox) checkbox.click();
-                    
-//                 await delay(1000)
-
-//             const captchaFrame = document.querySelector('iframe[src*="recaptcha"]');
-
-//             if(captchaFrame) {
-//                 console.log("Captcha Found! Turning ON Nopecha...");
-//                 await toggleNopecha(true); 
-//                 await delay(10000); 
-//                 await toggleNopecha(false); 
-//             }
-
-
-                
-//                 const bookBtn = document.querySelector('#button-new-appointment');
-//                 if(bookBtn) bookBtn.click();
-
-                
-//                 sendTelegramMessage(
-//                     data.tgToken, 
-//                     data.tgChatId, 
-//                     ` SUCCESS: Appointment booked for ${currentDate}! Passport: ${data.passportNo}`
-//                 );
-
-                
-//                 chrome.storage.local.set({ isRunning: false });
-//                 break; 
-//             } else {
-//                 console.log(`No slot for ${currentDate}. Moving to next...`);
-//                 await delay(3000);
-//             }
-//         }
-        
-    
-//         if(res.isRunning) {
-//             console.log("All dates checked. Reloading to loop again...");
-//             await delay(5000);
-//             window.location.reload();
-//         }
-//     });
-// }
-
-
-// function toggleNopecha(state) {
-//     return new Promise((resolve) => {
-//         chrome.runtime.sendMessage({ action: "TOGGLE_NOPECHA", state: state }, (res) => {
-//             resolve(res);
-//         });
-//     });
-// }
-
-
-// function sendTelegramMessage(token, chatId, text) {
-//     chrome.runtime.sendMessage({ 
-//         action: "SEND_TELEGRAM", 
-//         token: token, 
-//         chatId: chatId, 
-//         text: text 
-//     });
-// }
-
-// if (document.body.innerText.includes("502 Bad Gateway") || !navigator.onLine) {
-//     console.log("Network Error. Reloading in 10 seconds...");
-//     setTimeout(() => { window.location.reload(); }, 10000);
-// } else {
-
-//     window.addEventListener('load', async () => {
-//         await delay(2000); 
-//         runBot();
-//     });
-// }
-
-
 
 
 
 const delay = (ms)=>{
-    new Promise(resolve => setTimeout(resolve,ms));
+   return new Promise(resolve => setTimeout(resolve,ms));
 }
 
 
 const getStorageData = (keys) =>{
-    new Promise((resolve)=>{
+    return new Promise((resolve)=>{
         chrome.storage.local.get(keys,(res)=> resolve(res))
     })
 }
@@ -251,10 +93,14 @@ async function runBot(){
             await delay(7000);
                 
 
-            const slotAvailable = document.querySelector("#resultDiv table#result tbody tr td div[div]")
+            const allSlots = document.querySelectorAll("#resultDiv table#result tbody tr td div[id]")
             
 
-            if(slotAvailable){
+            if(allSlots.length > 0){
+
+                let targetIndex = Math.min(bookedCount,allSlots.length-1);
+
+                const slotAvailable = allSlots[targetIndex];
                 slotAvailable.click();
 
 
@@ -318,6 +164,24 @@ async function runBot(){
 
 
 function fillStaticInputs(data){
+
+    const typeSelect = document.querySelector("#type");
+    if(typeSelect && data.typeValue !== undefined){
+        typeSelect.value = data.typeValue;
+        typeSelect.dispatchEvent(new Event("change",{bubbles:true}))
+    }
+
+
+    const bookingForSelect = document.querySelector("#bookingfor")
+
+    if(bookingForSelect && data.bookingForValue !== undefined){
+        bookingForSelect.value = data.bookingForValue;
+
+        bookingForSelect.dispatchEvent(new Event("change",{bubbles:true}))
+    }
+
+
+
     const dobInput = document.querySelector("#gp_dateofbirth");
 
     if(dobInput){
@@ -346,7 +210,7 @@ function toggleNopecha(state){
 }
 
 
-function sendTelegramMessage (token,chaId,text){
+function sendTelegramMessage (token,chatId,text){
     chrome.runtime.sendMessage({
         action:"SEND_TELEGRAM",
         token:token,

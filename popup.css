@@ -17,11 +17,22 @@ label {
     display: block;
 }
 
-input {
+input,select {
     width: 100%;
     padding: 5px;
     margin-bottom: 10px;
     box-sizing: border-box;
+}
+select{
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: pointer;
+}
+hr{
+    border: 0;
+    border-top: 1px solid #CCC;
+    margin: 15px 0;
 }
 
 button {
@@ -38,7 +49,9 @@ button {
 button:hover {
     opacity: 0.9;
 }
-
+#stopBtn{
+    background: #dc3545 !important;
+}
 #status {
     text-align: center;
     font-size: 12px;

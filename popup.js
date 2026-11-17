@@ -2,23 +2,36 @@ document.addEventListener('DOMContentLoaded', () => {
     
     chrome.storage.local.get(['botData', 'isRunning'], (res) => {
         if (res.botData) {
-            document.getElementById('targetDates').value = res.botData.targetDates;
-            document.getElementById('passportNo').value = res.botData.passportNo;
-            document.getElementById('dob').value = res.botData.dob;
-            document.getElementById('email').value = res.botData.email;
-            document.getElementById('tgToken').value = res.botData.tgToken;
-            document.getElementById('tgChatId').value = res.botData.tgChatId;
+            
+            document.getElementById('targetDates').value = res.botData.targetDates || '';
+            document.getElementById('passportNo').value = res.botData.passportNo || '';
+            document.getElementById('dob').value = res.botData.dob || '';
+            document.getElementById('email').value = res.botData.email || '';
+            document.getElementById('tgToken').value = res.botData.tgToken || '';
+            document.getElementById('tgChatId').value = res.botData.tgChatId || '';
+            
+           
+            if(res.botData.typeValue !== undefined) {
+                document.getElementById('typeValue').value = res.botData.typeValue;
+            }
+            if(res.botData.bookingForValue !== undefined) {
+                document.getElementById('bookingForValue').value = res.botData.bookingForValue;
+            }
         }
+        
         if (res.isRunning) {
-            document.getElementById('status').innerText = "Bot is currently RUNNING! ";
+            document.getElementById('status').innerText = "Bot is currently RUNNING! 🟢";
         } else {
-            document.getElementById('status').innerText = "Bot is STOPPED. ";
+            document.getElementById('status').innerText = "Bot is STOPPED. 🔴";
         }
     });
 });
 
 document.getElementById('startBtn').addEventListener('click', () => {
+    
     const data = {
+        typeValue: document.getElementById('typeValue').value,
+        bookingForValue: document.getElementById('bookingForValue').value,
         targetDates: document.getElementById('targetDates').value,
         passportNo: document.getElementById('passportNo').value,
         dob: document.getElementById('dob').value,
@@ -31,7 +44,9 @@ document.getElementById('startBtn').addEventListener('click', () => {
         document.getElementById('status').innerText = "Data Saved & Bot Started! 🟢";
         
         chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-            chrome.tabs.reload(tabs[0].id);
+            if(tabs.length > 0) {
+                chrome.tabs.reload(tabs[0].id);
+            }
         });
     });
 });
