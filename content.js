@@ -2,7 +2,6 @@ const delay = (ms) => {
     return new Promise(resolve => setTimeout(resolve, ms));
 };
 
-
 const randomDelay = (min, max) => {
     let ms = Math.floor(Math.random() * (max - min + 1)) + min;
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -13,7 +12,6 @@ const getStorageData = (keys) => {
         chrome.storage.local.get(keys, (res) => resolve(res));
     });
 };
-
 
 function humanClick(element) {
     if (!element) return;
@@ -27,6 +25,21 @@ function humanClick(element) {
         });
         element.dispatchEvent(event);
     });
+}
+
+async function addLog(message) {
+    const now = new Date();
+    const timeString = now.toLocaleTimeString(); // যেমন: 10:30:15 AM
+    const logEntry = `[${timeString}] ${message}`;
+    
+    let res = await getStorageData(['botLogs']);
+    let logs = res.botLogs || [];
+    logs.push(logEntry);
+ 
+    if (logs.length > 50) {
+        logs.shift(); 
+    }
+    chrome.storage.local.set({ botLogs: logs });
 }
 
 async function runBot() {
@@ -43,29 +56,35 @@ async function runBot() {
     let bookedCount = res.bookedCount || 0;
 
     if (bookedCount >= 5) {
+        await addLog("Bot Stopped: Max limit (5) reached.");
         sendTelegramMessage(data.tgToken, data.tgChatId, "Bot Stopped: Max limit (5) reached.");
         chrome.storage.local.set({ isRunning: false });
         return;
     }
 
     fillStaticInputs(data);
+    await addLog("Filled static inputs (Name, Passport, DOB).");
     await delay(1500);
 
     const dateArray = data.targetDates.split(',').map(d => d.trim());
+    await addLog("Starting search for dates: " + dateArray.join(', '));
 
     while (true) {
         let currentStatus = await getStorageData(['isRunning']);
         if (!currentStatus.isRunning) {
+            await addLog("Bot was stopped manually.");
             break;
         }
 
         if (document.body.innerText.includes("Please login") || document.querySelector('input[type="password"]')) {
+            await addLog("Session expired. Please login again.");
             sendTelegramMessage(data.tgToken, data.tgChatId, "Bot Stopped: Session expired, please login.");
             chrome.storage.local.set({ isRunning: false });
             break;
         }
 
         if (document.body.innerText.includes("Too many requests") || document.body.innerText.includes("Access Denied")) {
+            await addLog("Rate limited! Waiting 60 seconds...");
             sendTelegramMessage(data.tgToken, data.tgChatId, "Warning: Rate limited. Waiting 60 seconds...");
             await delay(60000);
             continue;
@@ -75,6 +94,7 @@ async function runBot() {
 
         for (let i = 0; i < dateArray.length; i++) {
             let currentDate = dateArray[i];
+            await addLog(`Searching availability for: ${currentDate}`);
 
             const dateInput = document.querySelector("#datefrom");
 
@@ -101,6 +121,7 @@ async function runBot() {
             const allSlots = document.querySelectorAll("#resultDiv table#result tbody tr td div[id]");
 
             if (allSlots.length > 0) {
+                await addLog(`Slot found for ${currentDate}! Booking in progress...`);
                 let targetIndex = Math.min(bookedCount, allSlots.length - 1);
                 const slotAvailable = allSlots[targetIndex];
                 
@@ -125,6 +146,7 @@ async function runBot() {
                 bookedCount += 1;
                 chrome.storage.local.set({ bookedCount: bookedCount });
 
+                await addLog(`SUCCESS: Booked slot ${bookedCount} for ${currentDate}`);
                 sendTelegramMessage(
                     data.tgToken,
                     data.tgChatId,
@@ -134,12 +156,14 @@ async function runBot() {
                 slotBookedInThisCycle = true;
 
                 if (bookedCount >= 5) {
+                    await addLog("All 5 slots booked. Stopping bot.");
                     chrome.storage.local.set({ isRunning: false });
                     sendTelegramMessage(data.tgToken, data.tgChatId, "Bot Stopped: 5 slots booked successfully.");
                 }
 
                 break; 
             } else {
+                await addLog(`No slots for ${currentDate}.`);
                 await randomDelay(1800, 2500);
             }
         }
@@ -148,7 +172,9 @@ async function runBot() {
             break;
         }
 
-        await delay(30000); 
+        let intervalMs = (parseInt(data.searchInterval) || 30) * 1000;
+        await addLog(`Waiting ${data.searchInterval || 30} seconds before next search cycle...`);
+        await delay(intervalMs); 
     }
 }
 
@@ -177,6 +203,20 @@ function fillStaticInputs(data) {
         passportInput.value = data.passportNo;
         passportInput.dispatchEvent(new Event("input", { bubbles: true }));
         passportInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    const firstNameInput = document.querySelector("#gp_firstname");
+    if (firstNameInput && data.firstName) {
+        firstNameInput.value = data.firstName;
+        firstNameInput.dispatchEvent(new Event("input", { bubbles: true }));
+        firstNameInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    const surnameInput = document.querySelector("#gp_surname");
+    if (surnameInput && data.surname) {
+        surnameInput.value = data.surname;
+        surnameInput.dispatchEvent(new Event("input", { bubbles: true }));
+        surnameInput.dispatchEvent(new Event("change", { bubbles: true }));
     }
 }
 

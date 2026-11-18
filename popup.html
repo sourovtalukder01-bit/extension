@@ -3,29 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Appointment</title>
+    <title>Appointment Bot</title>
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-     <h2>🤖 Booking Bot Setup</h2>
+    <div class="header">
+        <h2>🤖 Booking Bot Setup</h2>
+    </div>
 
-     <label>Appointment Type:</label>
-     <select id="typeValue">
+    <label>Appointment Type:</label>
+    <select id="typeValue">
         <option value="0">Submission Schengen visa (Short term - Type C)</option>
         <option value="2">National visa (long term - type D)</option>
-        <option value="5">Premium lounge(Optional service at an additional change)</option>
-        <option value="6">Premium Time(optional Service at an additional charge)</option>
-     </select>
+        <option value="5">Premium lounge (Optional service at an additional charge)</option>
+        <option value="6">Premium Time (Optional service at an additional charge)</option>
+    </select>
 
-     <label>Booking For</label>
-     <select id="bookingForValue">
+    <label>Booking For</label>
+    <select id="bookingForValue">
         <option value="0">Individual</option>
-        <option value="1">Group(Family/Traveler)</option>
-     </select>
+        <option value="1">Group (Family/Traveler)</option>
+    </select>
     
     <label>Target Dates (DD/MM/YYYY):</label>
     <input type="text" id="targetDates" placeholder="12/05/2026, 14/05/2026">
     
+    <div class="form-row">
+        <div class="form-col">
+            <label>Surname</label>
+            <input type="text" id="surname" placeholder="Doe">
+        </div>
+        <div class="form-col">
+            <label>Name</label>
+            <input type="text" id="firstName" placeholder="John">
+        </div>
+    </div>
+
     <label>Passport Number:</label>
     <input type="text" id="passportNo" placeholder="A1234567">
     
@@ -39,14 +52,28 @@
     
     <label>Telegram Bot Token:</label>
     <input type="text" id="tgToken" placeholder="789456:ABC-DEF...">
+
+    <label>Search Interval (in seconds):</label>
+    <input type="number" id="searchInterval" placeholder="30" value="30">
     
     <label>Telegram Chat ID:</label>
     <input type="text" id="tgChatId" placeholder="123456789">
     
-    <button id="startBtn">Save & Start Bot</button>
-    <button id="stopBtn" style="background-color: red;">Stop Bot</button>
+    <div class="btn-group">
+        <button id="startBtn">Save & Start Bot</button>
+        <button id="stopBtn">Stop Bot</button>
+    </div>
 
     <p id="status"></p>
+
+    <hr>
+
+    <div class="log-header">
+        <h3>Activity Logs</h3>
+    </div>
+
+    <textarea id="logArea" rows="6" readonly></textarea>
+    <button id="clearLogsBtn">Clear Logs</button>
 
     <script src="popup.js"></script>
 </body>
