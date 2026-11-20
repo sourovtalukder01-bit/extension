@@ -1,247 +1,565 @@
-const delay = (ms) => {
-    return new Promise(resolve => setTimeout(resolve, ms));
-};
+const MAX_SLOTS = 5;
+const MAX_DOM_ERRORS = 3;
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const randomDelay = (min, max) => {
-    let ms = Math.floor(Math.random() * (max - min + 1)) + min;
-    return new Promise(resolve => setTimeout(resolve, ms));
+    const ms = Math.floor(Math.random() * (max - min + 1)) + min;
+    return delay(ms);
 };
 
 const getStorageData = (keys) => {
     return new Promise((resolve) => {
-        chrome.storage.local.get(keys, (res) => resolve(res));
+        chrome.storage.local.get(keys, (res) => resolve(res || {}));
     });
 };
 
-function humanClick(element) {
+const setStorageData = (obj) => {
+    return new Promise((resolve) => {
+        chrome.storage.local.set(obj, resolve);
+    });
+};
+
+let isRunningLocal = false;
+
+chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace === 'local' && changes.isRunning) {
+        isRunningLocal = Boolean(changes.isRunning.newValue);
+    }
+});
+
+
+async function smartDelay(ms) {
+    const step = 250;
+    let elapsed = 0;
+
+    while (elapsed < ms) {
+        if (!isRunningLocal) return false;
+        const waitTime = Math.min(step, ms - elapsed);
+        await delay(waitTime);
+        elapsed += waitTime;
+    }
+    return isRunningLocal;
+}
+
+async function humanClick(element) {
     if (!element) return;
-    const events = ['mouseenter', 'mouseover', 'mousedown', 'mouseup', 'click'];
-    events.forEach(eventType => {
-        const event = new MouseEvent(eventType, {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            buttons: 1
-        });
-        element.dispatchEvent(event);
+
+    const rect = element.getBoundingClientRect();
+    const clientX = rect.left + rect.width * (0.3 + Math.random() * 0.4);
+    const clientY = rect.top + rect.height * (0.3 + Math.random() * 0.4);
+
+    const commonOpts = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY
+    };
+
+    element.dispatchEvent(new MouseEvent('mouseenter', { ...commonOpts, buttons: 0 }));
+    element.dispatchEvent(new MouseEvent('mouseover', { ...commonOpts, buttons: 0 }));
+    await randomDelay(30, 80);
+
+    element.dispatchEvent(new MouseEvent('mousedown', { ...commonOpts, button: 0, buttons: 1 }));
+    await randomDelay(55, 130);
+
+    element.dispatchEvent(new MouseEvent('mouseup', { ...commonOpts, button: 0, buttons: 0 }));
+    element.dispatchEvent(new MouseEvent('click', { ...commonOpts, button: 0, buttons: 0 }));
+}
+
+let logQueue = Promise.resolve();
+
+function addLog(message) {
+    logQueue = logQueue
+        .then(async () => {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString();
+            const logEntry = `[${timeString}] ${message}`;
+
+            const res = await getStorageData(['botLogs']);
+            const logs = res.botLogs || [];
+            logs.push(logEntry);
+
+            if (logs.length > 50) {
+                logs.shift();
+            }
+            await setStorageData({ botLogs: logs });
+        })
+        .catch((err) => console.error("Log write error:", err));
+
+    return logQueue;
+}
+
+async function waitForCaptchaSolve(maxWaitMs = 25000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+        if (!isRunningLocal) return { solved: false, stopped: true };
+
+        const responseFields = document.querySelectorAll('textarea[name="g-recaptcha-response"]');
+        for (const field of responseFields) {
+            if (field.value && field.value.trim().length > 0) {
+                return { solved: true, stopped: false };
+            }
+        }
+        await delay(500);
+    }
+    return { solved: false, stopped: false };
+}
+
+function fillStaticInputs(data, onlyIfEmpty = false) {
+    const missingFields = [];
+
+    const setField = (selector, value, label, isSelect = false) => {
+        if (value === undefined || value === "") return;
+
+        const el = document.querySelector(selector);
+        if (!el) {
+            missingFields.push(label);
+            return;
+        }
+
+        if (onlyIfEmpty && el.value === String(value)) return;
+
+        el.focus();
+        el.value = value;
+        if (!isSelect) {
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.blur();
+    };
+
+    setField("#type", data.typeValue, "Type", true);
+    setField("#bookingfor", data.bookingForValue, "Booking For", true);
+    setField("#gp_dateofbirth", data.dob, "DOB");
+    setField("#gp_passportnumber", data.passportNo, "Passport No");
+    setField("#gp_firstname", data.firstName, "First Name");
+    setField("#gp_surname", data.surname, "Surname");
+
+    return missingFields;
+}
+
+function getAvailableSlots() {
+    const rawSlots = Array.from(
+        document.querySelectorAll("#resultDiv table#result tbody tr td div[id]")
+    );
+
+    return rawSlots.filter((el) => {
+        const isVisible = el.offsetParent !== null;
+        const isDisabled =
+            el.disabled ||
+            el.classList.contains('disabled') ||
+            el.getAttribute('aria-disabled') === 'true';
+        return isVisible && !isDisabled;
     });
 }
 
-async function addLog(message) {
-    const now = new Date();
-    const timeString = now.toLocaleTimeString(); // যেমন: 10:30:15 AM
-    const logEntry = `[${timeString}] ${message}`;
+function hasBookingConfirmationText(previousResultText = "") {
+    const confirmKeywords = [
+        "successfully",
+        "confirmed",
+        "booking reference",
+        "appointment has been booked"
+    ];
+
+    const containers = document.querySelectorAll(
+        "#resultDiv, .alert-success, .alert, .modal, .swal2-popup, #message, .notification"
+    );
+
+    let scopedText = "";
+    containers.forEach((el) => {
+        if (el.offsetParent !== null) {
+            scopedText += " " + (el.innerText || "");
+        }
+    });
+
+    const normalizedScoped = scopedText.toLowerCase().trim();
+    const normalizedPrev = previousResultText.toLowerCase().trim();
+
     
-    let res = await getStorageData(['botLogs']);
-    let logs = res.botLogs || [];
-    logs.push(logEntry);
- 
-    if (logs.length > 50) {
-        logs.shift(); 
-    }
-    chrome.storage.local.set({ botLogs: logs });
-}
-
-async function runBot() {
-    let res = await getStorageData(['botData', 'isRunning', 'bookedCount']);
-
-    if (!res.isRunning) return;
-
-    const data = res.botData;
-
-    if (!data) {
-        return;
+    if (normalizedScoped && normalizedScoped !== normalizedPrev) {
+        return confirmKeywords.some((kw) => normalizedScoped.includes(kw));
     }
 
-    let bookedCount = res.bookedCount || 0;
-
-    if (bookedCount >= 5) {
-        await addLog("Bot Stopped: Max limit (5) reached.");
-        sendTelegramMessage(data.tgToken, data.tgChatId, "Bot Stopped: Max limit (5) reached.");
-        chrome.storage.local.set({ isRunning: false });
-        return;
+    const currentUrl = window.location.href.toLowerCase();
+    if (currentUrl.includes("confirm") || currentUrl.includes("success")) {
+        const bodyText = (document.body.innerText || "").toLowerCase();
+        return confirmKeywords.some((kw) => bodyText.includes(kw));
     }
 
-    fillStaticInputs(data);
-    await addLog("Filled static inputs (Name, Passport, DOB).");
-    await delay(1500);
-
-    const dateArray = data.targetDates.split(',').map(d => d.trim());
-    await addLog("Starting search for dates: " + dateArray.join(', '));
-
-    while (true) {
-        let currentStatus = await getStorageData(['isRunning']);
-        if (!currentStatus.isRunning) {
-            await addLog("Bot was stopped manually.");
-            break;
-        }
-
-        if (document.body.innerText.includes("Please login") || document.querySelector('input[type="password"]')) {
-            await addLog("Session expired. Please login again.");
-            sendTelegramMessage(data.tgToken, data.tgChatId, "Bot Stopped: Session expired, please login.");
-            chrome.storage.local.set({ isRunning: false });
-            break;
-        }
-
-        if (document.body.innerText.includes("Too many requests") || document.body.innerText.includes("Access Denied")) {
-            await addLog("Rate limited! Waiting 60 seconds...");
-            sendTelegramMessage(data.tgToken, data.tgChatId, "Warning: Rate limited. Waiting 60 seconds...");
-            await delay(60000);
-            continue;
-        }
-
-        let slotBookedInThisCycle = false;
-
-        for (let i = 0; i < dateArray.length; i++) {
-            let currentDate = dateArray[i];
-            await addLog(`Searching availability for: ${currentDate}`);
-
-            const dateInput = document.querySelector("#datefrom");
-
-            if (dateInput) {
-                dateInput.focus(); 
-                await randomDelay(200, 400); 
-                
-                dateInput.value = currentDate;
-                
-                dateInput.dispatchEvent(new Event("input", { bubbles: true }));
-                dateInput.dispatchEvent(new Event("change", { bubbles: true }));
-                dateInput.blur(); 
-            }
-
-            const searchBtn = document.querySelector("#btn-search");
-            await randomDelay(400, 800); 
-
-            if (searchBtn) {
-                humanClick(searchBtn); 
-            }
-
-            await randomDelay(6500, 8000); 
-
-            const allSlots = document.querySelectorAll("#resultDiv table#result tbody tr td div[id]");
-
-            if (allSlots.length > 0) {
-                await addLog(`Slot found for ${currentDate}! Booking in progress...`);
-                let targetIndex = Math.min(bookedCount, allSlots.length - 1);
-                const slotAvailable = allSlots[targetIndex];
-                
-                humanClick(slotAvailable); 
-                await randomDelay(1200, 1600);
-
-                const checkbox = document.querySelector('#submissiontext #submitinfo');
-                if (checkbox) humanClick(checkbox); 
-
-                await randomDelay(800, 1200);
-
-                const captchaFrame = document.querySelector('iframe[src*="recaptcha"]');
-                if (captchaFrame) {
-                    await toggleNopecha(true);
-                    await delay(12000);
-                    await toggleNopecha(false);
-                }
-
-                const bookBtn = document.querySelector('#button-new-appointment');
-                if (bookBtn) humanClick(bookBtn);
-
-                bookedCount += 1;
-                chrome.storage.local.set({ bookedCount: bookedCount });
-
-                await addLog(`SUCCESS: Booked slot ${bookedCount} for ${currentDate}`);
-                sendTelegramMessage(
-                    data.tgToken,
-                    data.tgChatId,
-                    `SUCCESS: Booked slot ${targetIndex + 1} for ${currentDate}. Passport: ${data.passportNo}`
-                );
-
-                slotBookedInThisCycle = true;
-
-                if (bookedCount >= 5) {
-                    await addLog("All 5 slots booked. Stopping bot.");
-                    chrome.storage.local.set({ isRunning: false });
-                    sendTelegramMessage(data.tgToken, data.tgChatId, "Bot Stopped: 5 slots booked successfully.");
-                }
-
-                break; 
-            } else {
-                await addLog(`No slots for ${currentDate}.`);
-                await randomDelay(1800, 2500);
-            }
-        }
-
-        if (slotBookedInThisCycle) {
-            break;
-        }
-
-        let intervalMs = (parseInt(data.searchInterval) || 30) * 1000;
-        await addLog(`Waiting ${data.searchInterval || 30} seconds before next search cycle...`);
-        await delay(intervalMs); 
-    }
-}
-
-function fillStaticInputs(data) {
-    const typeSelect = document.querySelector("#type");
-    if (typeSelect && data.typeValue !== undefined) {
-        typeSelect.value = data.typeValue;
-        typeSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    const bookingForSelect = document.querySelector("#bookingfor");
-    if (bookingForSelect && data.bookingForValue !== undefined) {
-        bookingForSelect.value = data.bookingForValue;
-        bookingForSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    const dobInput = document.querySelector("#gp_dateofbirth");
-    if (dobInput) {
-        dobInput.value = data.dob;
-        dobInput.dispatchEvent(new Event("input", { bubbles: true }));
-        dobInput.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    const passportInput = document.querySelector("#gp_passportnumber");
-    if (passportInput) {
-        passportInput.value = data.passportNo;
-        passportInput.dispatchEvent(new Event("input", { bubbles: true }));
-        passportInput.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    const firstNameInput = document.querySelector("#gp_firstname");
-    if (firstNameInput && data.firstName) {
-        firstNameInput.value = data.firstName;
-        firstNameInput.dispatchEvent(new Event("input", { bubbles: true }));
-        firstNameInput.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    const surnameInput = document.querySelector("#gp_surname");
-    if (surnameInput && data.surname) {
-        surnameInput.value = data.surname;
-        surnameInput.dispatchEvent(new Event("input", { bubbles: true }));
-        surnameInput.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    return false;
 }
 
 function toggleNopecha(state) {
     return new Promise((resolve) => {
-        chrome.runtime.sendMessage({ action: "TOGGLE_NOPECHA", state: state }, (res) => {
-            resolve(res);
+        chrome.runtime.sendMessage({ action: "TOGGLE_NOPECHA", state }, (res) => {
+            if (chrome.runtime.lastError) {
+                console.warn("NopeCHA message error:", chrome.runtime.lastError.message);
+                resolve({ success: false, error: chrome.runtime.lastError.message });
+                return;
+            }
+            resolve(res || { success: false });
         });
     });
 }
 
 function sendTelegramMessage(token, chatId, text) {
-    chrome.runtime.sendMessage({
-        action: "SEND_TELEGRAM",
-        token: token,
-        chatId: chatId, 
-        text: text,
+    if (!token || !chatId) return Promise.resolve({ skipped: true });
+
+    return new Promise((resolve) => {
+        chrome.runtime.sendMessage(
+            {
+                action: "SEND_TELEGRAM",
+                token,
+                chatId,
+                text
+            },
+            (res) => {
+                if (chrome.runtime.lastError) {
+                    console.warn("Telegram message error:", chrome.runtime.lastError.message);
+                    resolve({ success: false, error: chrome.runtime.lastError.message });
+                    return;
+                }
+                resolve(res || { success: false });
+            }
+        );
     });
 }
 
-if (!navigator.onLine) {
-    setTimeout(() => { window.location.reload(); }, 10000);
-} else {
-    window.addEventListener('load', async () => {
+async function handleConfirmedBooking(data, bookedCount, dateStr) {
+    const updatedCount = bookedCount + 1;
+    await setStorageData({ bookedCount: updatedCount, pendingBooking: null });
+
+    await addLog(`SUCCESS: Booked slot ${updatedCount}/${MAX_SLOTS} for ${dateStr}`);
+    const tgRes = await sendTelegramMessage(
+        data.tgToken,
+        data.tgChatId,
+        `SUCCESS: Booked slot ${updatedCount}/${MAX_SLOTS} for ${dateStr}. Passport: ${data.passportNo}`
+    );
+    if (tgRes && tgRes.success === false) {
+        await addLog("Warning: Failed to send Telegram alert.");
+    }
+
+    if (updatedCount >= MAX_SLOTS) {
+        await addLog(`All ${MAX_SLOTS} slots booked. Stopping bot.`);
+        isRunningLocal = false;
+        await setStorageData({ isRunning: false });
+        await sendTelegramMessage(data.tgToken, data.tgChatId, `Bot Stopped: ${MAX_SLOTS} slots booked successfully.`);
+    }
+
+    return updatedCount;
+}
+
+let isBotActive = false;
+
+async function runBot() {
+    if (isBotActive) return;
+    isBotActive = true;
+
+    try {
+        const res = await getStorageData(['botData', 'isRunning', 'bookedCount', 'pendingBooking']);
+        isRunningLocal = Boolean(res.isRunning);
+        if (!isRunningLocal) return;
+
+        const data = res.botData;
+        if (!data || !data.targetDates) {
+            await addLog("Bot Stopped: Missing botData or targetDates.");
+            isRunningLocal = false;
+            await setStorageData({ isRunning: false });
+            return;
+        }
+
+        let bookedCount = res.bookedCount || 0;
+
+        if (res.pendingBooking) {
+            const isRecent = Date.now() - res.pendingBooking.timestamp < 30000;
+            await setStorageData({ pendingBooking: null });
+
+            if (isRecent && hasBookingConfirmationText("")) {
+                bookedCount = await handleConfirmedBooking(data, bookedCount, res.pendingBooking.date);
+                if (bookedCount >= MAX_SLOTS) return;
+            }
+        }
+
+        if (bookedCount >= MAX_SLOTS) {
+            await addLog(`Bot Stopped: Max limit (${MAX_SLOTS}) reached.`);
+            await sendTelegramMessage(data.tgToken, data.tgChatId, `Bot Stopped: Max limit (${MAX_SLOTS}) reached.`);
+            isRunningLocal = false;
+            await setStorageData({ isRunning: false });
+            return;
+        }
+
+        const missing = fillStaticInputs(data);
+        if (missing.length > 0) {
+            await addLog(`Warning: Some inputs not found on page (${missing.join(', ')}).`);
+        } else {
+            await addLog("Filled static inputs (Name, Passport, DOB).");
+        }
+
+        if (!(await smartDelay(1500))) {
+            await addLog("Bot was stopped manually.");
+            return;
+        }
+
+        const dateArray = data.targetDates
+            .split(',')
+            .map((d) => d.trim())
+            .filter(Boolean);
+
+        if (dateArray.length === 0) {
+            await addLog("Bot Stopped: No valid dates provided.");
+            isRunningLocal = false;
+            await setStorageData({ isRunning: false });
+            return;
+        }
+
+        await addLog("Starting search for dates: " + dateArray.join(', '));
+
+        let consecutiveDomErrors = 0;
+
+        while (isRunningLocal) {
+          
+            if (!navigator.onLine) {
+                await addLog("Offline detected. Waiting 10 seconds to reconnect...");
+                const onlineWait = await smartDelay(10000);
+                if (!onlineWait) {
+                    await addLog("Bot was stopped manually while offline.");
+                    break;
+                }
+                if (!navigator.onLine) {
+                    await addLog("Still offline. Reloading page...");
+                    window.location.reload();
+                    return;
+                }
+                continue;
+            }
+
+            const bodyText = (document.body.innerText || "").toLowerCase();
+
+            if (
+                bodyText.includes("please login") ||
+                bodyText.includes("session expired") ||
+                document.querySelector('input[type="password"]')
+            ) {
+                await addLog("Session expired. Please login again.");
+                await sendTelegramMessage(data.tgToken, data.tgChatId, "Bot Stopped: Session expired, please login.");
+                isRunningLocal = false;
+                await setStorageData({ isRunning: false });
+                break;
+            }
+
+            if (
+                bodyText.includes("too many requests") ||
+                bodyText.includes("access denied") ||
+                bodyText.includes("unauthorized access")
+            ) {
+                await addLog("Rate limited / Access blocked! Waiting 60 seconds...");
+                await sendTelegramMessage(data.tgToken, data.tgChatId, "Warning: Rate limited. Waiting 60 seconds...");
+                const shouldContinue = await smartDelay(60000);
+                if (!shouldContinue) {
+                    await addLog("Bot was stopped manually during cooldown.");
+                    break;
+                }
+                continue;
+            }
+
+            fillStaticInputs(data, true);
+
+            let slotBookedInThisCycle = false;
+
+            for (let i = 0; i < dateArray.length; i++) {
+                if (!isRunningLocal) {
+                    await addLog("Bot was stopped manually.");
+                    return;
+                }
+
+                if (!navigator.onLine) {
+                    await addLog("Connection dropped mid-cycle. Pausing search...");
+                    break;
+                }
+
+                const currentDate = dateArray[i];
+                await addLog(`Searching availability for: ${currentDate}`);
+
+                const dateInput = document.querySelector("#datefrom");
+                const searchBtn = document.querySelector("#btn-search");
+
+               
+                if (!dateInput || !searchBtn) {
+                    consecutiveDomErrors += 1;
+                    const missingEl = !dateInput ? "#datefrom" : "#btn-search";
+                    await addLog(`Error (${consecutiveDomErrors}/${MAX_DOM_ERRORS}): ${missingEl} not found.`);
+
+                    if (consecutiveDomErrors >= MAX_DOM_ERRORS) {
+                        await addLog("Bot Stopped: Target page elements missing repeatedly.");
+                        await sendTelegramMessage(
+                            data.tgToken,
+                            data.tgChatId,
+                            `Bot Stopped: Element ${missingEl} missing ${MAX_DOM_ERRORS} times in a row. Check browser tab.`
+                        );
+                        isRunningLocal = false;
+                        await setStorageData({ isRunning: false });
+                        return;
+                    }
+                    break;
+                }
+
+                consecutiveDomErrors = 0;
+
+                dateInput.focus();
+                await randomDelay(200, 400);
+                dateInput.value = currentDate;
+                dateInput.dispatchEvent(new Event("input", { bubbles: true }));
+                dateInput.dispatchEvent(new Event("change", { bubbles: true }));
+                dateInput.blur();
+
+                await randomDelay(400, 800);
+                await humanClick(searchBtn);
+
+                const waitSearch = await smartDelay(Math.floor(Math.random() * 1500) + 6500);
+                if (!waitSearch) {
+                    await addLog("Bot was stopped manually.");
+                    return;
+                }
+
+                const availableSlots = getAvailableSlots();
+
+                if (availableSlots.length > 0) {
+                    await addLog(`Found ${availableSlots.length} active slot(s) for ${currentDate}! Booking...`);
+
+                    const slotAvailable = availableSlots[0];
+                    await humanClick(slotAvailable);
+                    await randomDelay(1200, 1600);
+
+                    const checkbox = document.querySelector('#submissiontext #submitinfo');
+                    if (checkbox && !checkbox.checked) {
+                        await humanClick(checkbox);
+                    }
+
+                    await randomDelay(800, 1200);
+
+                    const captchaFrame = document.querySelector('iframe[src*="recaptcha"]');
+                    if (captchaFrame) {
+                        await addLog("reCAPTCHA detected! Enabling NopeCHA...");
+                        let captchaResult = { solved: false, stopped: false };
+
+                        try {
+                            await toggleNopecha(true);
+                            captchaResult = await waitForCaptchaSolve(25000);
+                        } finally {
+                            await toggleNopecha(false);
+                        }
+
+                        if (captchaResult.stopped) {
+                            await addLog("Bot stopped during captcha wait.");
+                            return;
+                        }
+
+                        if (!captchaResult.solved) {
+                            await addLog(`Captcha timeout for ${currentDate}. Skipping to retry...`);
+                            continue;
+                        }
+
+                        await addLog("Captcha solved!");
+                        await randomDelay(400, 800);
+                    }
+
+                    const bookBtn = document.querySelector('#button-new-appointment');
+                    if (!bookBtn) {
+                        await addLog("Error: Book button (#button-new-appointment) not found.");
+                        continue;
+                    }
+
+                    const resultDivBefore = document.querySelector("#resultDiv")?.innerText || "";
+
+                    await setStorageData({
+                        pendingBooking: { date: currentDate, timestamp: Date.now() }
+                    });
+
+                    await humanClick(bookBtn);
+
+                    const waitConfirm = await smartDelay(Math.floor(Math.random() * 1500) + 3000);
+                    if (!waitConfirm) {
+                        await setStorageData({ pendingBooking: null });
+                        await addLog("Bot was stopped manually.");
+                        return;
+                    }
+
+                    if (hasBookingConfirmationText(resultDivBefore)) {
+                        bookedCount = await handleConfirmedBooking(data, bookedCount, currentDate);
+                        slotBookedInThisCycle = true;
+
+                        if (bookedCount >= MAX_SLOTS) return;
+                        break;
+                    } else {
+                        await setStorageData({ pendingBooking: null });
+                        await addLog(`Booking not confirmed for ${currentDate}. Retrying...`);
+                    }
+                } else {
+                    await addLog(`No active slots for ${currentDate}.`);
+                    const waitNext = await smartDelay(Math.floor(Math.random() * 700) + 1800);
+                    if (!waitNext) {
+                        await addLog("Bot was stopped manually.");
+                        return;
+                    }
+                }
+            }
+
+            if (!isRunningLocal) break;
+
+            if (slotBookedInThisCycle) {
+                await addLog("Preparing next search for remaining slots...");
+                if (!(await smartDelay(3000))) {
+                    await addLog("Bot was stopped manually.");
+                    break;
+                }
+                continue;
+            }
+
+            const intervalSec = parseInt(data.searchInterval, 10) || 30;
+            await addLog(`Waiting ${intervalSec} seconds before next search cycle...`);
+            if (!(await smartDelay(intervalSec * 1000))) {
+                await addLog("Bot was stopped manually.");
+                break;
+            }
+        }
+    } catch (err) {
+        console.error("Bot fatal error:", err);
+        await addLog(`Error: ${err.message || "Unexpected error occurred."}`);
+    } finally {
+        isBotActive = false;
+    }
+}
+
+window.addEventListener('offline', () => {
+    addLog("Internet connection lost! Waiting to reconnect...");
+});
+
+window.addEventListener('online', () => {
+    addLog("Internet connection restored.");
+});
+
+function initBot() {
+    if (!navigator.onLine) {
+        setTimeout(async () => {
+            await addLog("Offline at startup. Reloading page...");
+            window.location.reload();
+        }, 10000);
+        return;
+    }
+
+    const start = async () => {
         await randomDelay(1500, 2500);
         runBot();
-    });
+    };
+
+    if (document.readyState === 'complete') {
+        start();
+    } else {
+        window.addEventListener('load', start, { once: true });
+    }
 }
+
+initBot();
