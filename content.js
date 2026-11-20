@@ -1,5 +1,8 @@
 const MAX_SLOTS = 5;
 const MAX_DOM_ERRORS = 3;
+const MIN_RELOAD_MINUTES = 14;
+const MAX_RELOAD_MINUTES = 18;
+const MAX_PROXY_RETRIES = 3;
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -27,7 +30,6 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         isRunningLocal = Boolean(changes.isRunning.newValue);
     }
 });
-
 
 async function smartDelay(ms) {
     const step = 250;
@@ -178,7 +180,6 @@ function hasBookingConfirmationText(previousResultText = "") {
     const normalizedScoped = scopedText.toLowerCase().trim();
     const normalizedPrev = previousResultText.toLowerCase().trim();
 
-    
     if (normalizedScoped && normalizedScoped !== normalizedPrev) {
         return confirmKeywords.some((kw) => normalizedScoped.includes(kw));
     }
@@ -197,6 +198,20 @@ function toggleNopecha(state) {
         chrome.runtime.sendMessage({ action: "TOGGLE_NOPECHA", state }, (res) => {
             if (chrome.runtime.lastError) {
                 console.warn("NopeCHA message error:", chrome.runtime.lastError.message);
+                resolve({ success: false, error: chrome.runtime.lastError.message });
+                return;
+            }
+            resolve(res || { success: false });
+        });
+    });
+}
+
+
+function rotateProxyIp() {
+    return new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: "ROTATE_PROXY_IP" }, (res) => {
+            if (chrome.runtime.lastError) {
+                console.warn("Proxy rotate error:", chrome.runtime.lastError.message);
                 resolve({ success: false, error: chrome.runtime.lastError.message });
                 return;
             }
@@ -317,10 +332,34 @@ async function runBot() {
 
         await addLog("Starting search for dates: " + dateArray.join(', '));
 
+      
+        const pageLoadTime = Date.now();
+        const minSec = MIN_RELOAD_MINUTES * 60;
+        const maxSec = MAX_RELOAD_MINUTES * 60;
+        const reloadAfterMs =
+            (Math.floor(Math.random() * (maxSec - minSec + 1)) + minSec) * 1000;
+
+        const reloadMins = Math.floor(reloadAfterMs / 60000);
+        const reloadSecs = Math.floor((reloadAfterMs % 60000) / 1000);
+        await addLog(`Auto IP rotate & reload scheduled in ${reloadMins}m ${reloadSecs}s.`);
+
         let consecutiveDomErrors = 0;
 
         while (isRunningLocal) {
           
+            if (Date.now() - pageLoadTime >= reloadAfterMs) {
+                await addLog("Refresh time reached. Rotating IP before reload...");
+                const rot = await rotateProxyIp();
+                if (rot.success) {
+                    await addLog(`IP rotated (Session: ${rot.sessionId}). Reloading page...`);
+                } else {
+                    await addLog("Proxy not active/failed to rotate. Reloading page...");
+                }
+                await delay(1500);
+                window.location.reload();
+                return;
+            }
+
             if (!navigator.onLine) {
                 await addLog("Offline detected. Waiting 10 seconds to reconnect...");
                 const onlineWait = await smartDelay(10000);
@@ -350,19 +389,46 @@ async function runBot() {
                 break;
             }
 
+           
             if (
                 bodyText.includes("too many requests") ||
                 bodyText.includes("access denied") ||
                 bodyText.includes("unauthorized access")
             ) {
-                await addLog("Rate limited / Access blocked! Waiting 60 seconds...");
-                await sendTelegramMessage(data.tgToken, data.tgChatId, "Warning: Rate limited. Waiting 60 seconds...");
-                const shouldContinue = await smartDelay(60000);
-                if (!shouldContinue) {
-                    await addLog("Bot was stopped manually during cooldown.");
+                const retryRes = await getStorageData(['proxyRetryCount']);
+                const retries = (retryRes.proxyRetryCount || 0) + 1;
+
+                if (retries > MAX_PROXY_RETRIES) {
+                    await setStorageData({ proxyRetryCount: 0, isRunning: false });
+                    isRunningLocal = false;
+                    await addLog(`Bot Stopped: Blocked even after ${MAX_PROXY_RETRIES} IP rotations.`);
+                    await sendTelegramMessage(
+                        data.tgToken,
+                        data.tgChatId,
+                        `Bot Stopped: ${MAX_PROXY_RETRIES} বার IP রোটেট করার পরও Unauthorized Access / Block আসছে।`
+                    );
                     break;
                 }
-                continue;
+
+                await setStorageData({ proxyRetryCount: retries });
+                await addLog(`Access blocked! Rotating IP (Attempt ${retries}/${MAX_PROXY_RETRIES})...`);
+                const rot = await rotateProxyIp();
+
+                if (rot.success) {
+                    await addLog(`New IP set (Session: ${rot.sessionId}). Reloading page...`);
+                    await delay(2000);
+                    window.location.reload();
+                    return;
+                } else {
+                    await addLog("Proxy not configured. Waiting 60 seconds...");
+                    await sendTelegramMessage(data.tgToken, data.tgChatId, "Warning: Rate limited / Unauthorized Access. Waiting 60 seconds...");
+                    const shouldContinue = await smartDelay(60000);
+                    if (!shouldContinue) {
+                        await addLog("Bot was stopped manually during cooldown.");
+                        break;
+                    }
+                    continue;
+                }
             }
 
             fillStaticInputs(data, true);
@@ -386,7 +452,6 @@ async function runBot() {
                 const dateInput = document.querySelector("#datefrom");
                 const searchBtn = document.querySelector("#btn-search");
 
-               
                 if (!dateInput || !searchBtn) {
                     consecutiveDomErrors += 1;
                     const missingEl = !dateInput ? "#datefrom" : "#btn-search";
@@ -407,6 +472,7 @@ async function runBot() {
                 }
 
                 consecutiveDomErrors = 0;
+                await setStorageData({ proxyRetryCount: 0 });
 
                 dateInput.focus();
                 await randomDelay(200, 400);
@@ -518,9 +584,23 @@ async function runBot() {
                 continue;
             }
 
-            const intervalSec = parseInt(data.searchInterval, 10) || 30;
-            await addLog(`Waiting ${intervalSec} seconds before next search cycle...`);
-            if (!(await smartDelay(intervalSec * 1000))) {
+            const intervalMs = (parseInt(data.searchInterval, 10) || 30) * 1000;
+            const remainingBeforeReload = reloadAfterMs - (Date.now() - pageLoadTime);
+
+            if (remainingBeforeReload <= 1000) {
+                await addLog("Refresh time reached. Rotating IP before reload...");
+                const rot = await rotateProxyIp();
+                if (rot.success) {
+                    await addLog(`IP rotated (Session: ${rot.sessionId}). Reloading page...`);
+                }
+                await delay(1500);
+                window.location.reload();
+                return;
+            }
+
+            const waitMs = Math.min(intervalMs, remainingBeforeReload);
+            await addLog(`Waiting ${Math.ceil(waitMs / 1000)} seconds before next search cycle...`);
+            if (!(await smartDelay(waitMs))) {
                 await addLog("Bot was stopped manually.");
                 break;
             }
@@ -534,16 +614,26 @@ async function runBot() {
 }
 
 window.addEventListener('offline', () => {
-    addLog("Internet connection lost! Waiting to reconnect...");
+    if (isRunningLocal) {
+        addLog("Internet connection lost! Waiting to reconnect...");
+    }
 });
 
 window.addEventListener('online', () => {
-    addLog("Internet connection restored.");
+    if (isRunningLocal) {
+        addLog("Internet connection restored.");
+    }
 });
 
-function initBot() {
+async function initBot() {
+    const res = await getStorageData(['isRunning']);
+    isRunningLocal = Boolean(res.isRunning);
+    if (!isRunningLocal) return;
+
     if (!navigator.onLine) {
         setTimeout(async () => {
+            const latest = await getStorageData(['isRunning']);
+            if (!latest.isRunning) return;
             await addLog("Offline at startup. Reloading page...");
             window.location.reload();
         }, 10000);

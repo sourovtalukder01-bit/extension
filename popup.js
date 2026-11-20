@@ -11,27 +11,51 @@ document.addEventListener('DOMContentLoaded', () => {
     const firstNameInput = document.getElementById('firstName');
     const surnameInput = document.getElementById('surname');
     const searchIntervalInput = document.getElementById('searchInterval');
-    
+
+    const proxyHostInput = document.getElementById('proxyHost');
+    const proxyPortInput = document.getElementById('proxyPort');
+    const proxyUserInput = document.getElementById('proxyUser');
+    const proxyPassInput = document.getElementById('proxyPass');
+    const useStickyInput = document.getElementById('useStickyProxy');
+
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const statusText = document.getElementById('status');
 
-
     const logArea = document.getElementById('logArea');
     const clearLogsBtn = document.getElementById('clearLogsBtn');
 
+   
+    const DEFAULT_PROXY = {
+        host: "proxy.smartproxy.net",
+        port: "3120",
+        username: "smart-zcoa781ayrze",
+        password: "te5uMzBWgKYnAIHT",
+        targetDomain: "bd-gr-services.gvcworld.eu",
+        useSticky: true
+    };
 
     function renderLogs(logs) {
-        if (!logArea) return; 
+        if (!logArea) return;
         if (!logs || logs.length === 0) {
             logArea.value = "No logs available yet...";
         } else {
             logArea.value = logs.join('\n');
-            logArea.scrollTop = logArea.scrollHeight; 
+            logArea.scrollTop = logArea.scrollHeight;
         }
     }
 
-    chrome.storage.local.get(['botData', 'isRunning', 'botLogs'], (result) => {
+    function updateStatusUI(isRunning) {
+        if (isRunning) {
+            statusText.innerText = "Status: Bot is RUNNING 🟢";
+            statusText.style.color = "green";
+        } else {
+            statusText.innerText = "Status: Bot is STOPPED 🔴";
+            statusText.style.color = "red";
+        }
+    }
+
+    chrome.storage.local.get(['botData', 'proxyConfig', 'isRunning', 'botLogs'], (result) => {
         if (result.botData) {
             typeSelect.value = result.botData.typeValue || "0";
             bookingForSelect.value = result.botData.bookingForValue || "0";
@@ -41,45 +65,37 @@ document.addEventListener('DOMContentLoaded', () => {
             emailInput.value = result.botData.email || "";
             tgTokenInput.value = result.botData.tgToken || "";
             tgChatIdInput.value = result.botData.tgChatId || "";
-            
+
             firstNameInput.value = result.botData.firstName || "";
             surnameInput.value = result.botData.surname || "";
             searchIntervalInput.value = result.botData.searchInterval || "30";
         }
-        
-      
-        renderLogs(result.botLogs);
 
-        if (result.isRunning) {
-            statusText.innerText = "Status: Bot is RUNNING 🟢";
-            statusText.style.color = "green";
-        } else {
-            statusText.innerText = "Status: Bot is STOPPED 🔴";
-            statusText.style.color = "red";
+        const savedProxy = result.proxyConfig || {};
+        if (proxyHostInput) proxyHostInput.value = savedProxy.host || DEFAULT_PROXY.host;
+        if (proxyPortInput) proxyPortInput.value = savedProxy.port || DEFAULT_PROXY.port;
+        if (proxyUserInput) proxyUserInput.value = savedProxy.baseUsername || DEFAULT_PROXY.username;
+        if (proxyPassInput) proxyPassInput.value = savedProxy.password || DEFAULT_PROXY.password;
+        if (useStickyInput) {
+            useStickyInput.checked =
+                savedProxy.useSticky !== undefined ? Boolean(savedProxy.useSticky) : DEFAULT_PROXY.useSticky;
         }
+
+        renderLogs(result.botLogs);
+        updateStatusUI(result.isRunning);
     });
 
-    
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace === 'local') {
-           
             if (changes.botLogs) {
                 renderLogs(changes.botLogs.newValue);
             }
-            
             if (changes.isRunning) {
-                if (changes.isRunning.newValue) {
-                    statusText.innerText = "Status: Bot is RUNNING 🟢";
-                    statusText.style.color = "green";
-                } else {
-                    statusText.innerText = "Status: Bot is STOPPED 🔴";
-                    statusText.style.color = "red";
-                }
+                updateStatusUI(changes.isRunning.newValue);
             }
         }
     });
 
-   
     if (clearLogsBtn) {
         clearLogsBtn.addEventListener('click', () => {
             chrome.storage.local.set({ botLogs: [] }, () => {
@@ -88,8 +104,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function reloadActiveTab() {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0]) {
+                chrome.tabs.reload(tabs[0].id);
+            }
+        });
+    }
+
     startBtn.addEventListener('click', () => {
-        if (!targetDatesInput.value || !passportNoInput.value || !dobInput.value) {
+        if (!targetDatesInput.value.trim() || !passportNoInput.value.trim() || !dobInput.value.trim()) {
             statusText.innerText = "Please fill in all required fields!";
             statusText.style.color = "orange";
             return;
@@ -98,38 +122,62 @@ document.addEventListener('DOMContentLoaded', () => {
         const botData = {
             typeValue: typeSelect.value,
             bookingForValue: bookingForSelect.value,
-            targetDates: targetDatesInput.value,
-            passportNo: passportNoInput.value,
-            dob: dobInput.value,
-            email: emailInput.value,
-            tgToken: tgTokenInput.value,
-            tgChatId: tgChatIdInput.value,
+            targetDates: targetDatesInput.value.trim(),
+            passportNo: passportNoInput.value.trim(),
+            dob: dobInput.value.trim(),
+            email: emailInput.value.trim(),
+            tgToken: tgTokenInput.value.trim(),
+            tgChatId: tgChatIdInput.value.trim(),
 
-            firstName: firstNameInput.value,
-            surname: surnameInput.value,
-            searchInterval: searchIntervalInput.value,
+            firstName: firstNameInput.value.trim(),
+            surname: surnameInput.value.trim(),
+            searchInterval: searchIntervalInput.value.trim() || "30",
         };
 
-        chrome.storage.local.set({ 
-            botData: botData, 
+        const proxyHost = (proxyHostInput && proxyHostInput.value.trim()) || DEFAULT_PROXY.host;
+        const proxyPort = (proxyPortInput && proxyPortInput.value.trim()) || DEFAULT_PROXY.port;
+        const proxyUser = (proxyUserInput && proxyUserInput.value.trim()) || DEFAULT_PROXY.username;
+        const proxyPass = (proxyPassInput && proxyPassInput.value.trim()) || DEFAULT_PROXY.password;
+        const useSticky = useStickyInput ? useStickyInput.checked : DEFAULT_PROXY.useSticky;
+
+        chrome.storage.local.set({
+            botData: botData,
             isRunning: true,
-            bookedCount: 0 
+            bookedCount: 0,
+            proxyRetryCount: 0
         }, () => {
-            statusText.innerText = "Status: Bot Started Successfully! 🟢";
-            statusText.style.color = "green";
-            
-            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-                if (tabs[0]) {
-                    chrome.tabs.reload(tabs[0].id);
+            chrome.runtime.sendMessage({
+                action: "SET_PROXY",
+                config: {
+                    host: proxyHost,
+                    port: proxyPort,
+                    username: proxyUser,
+                    password: proxyPass,
+                    targetDomain: DEFAULT_PROXY.targetDomain,
+                    useSticky: useSticky
                 }
+            }, (res) => {
+                if (res && res.success) {
+                    statusText.innerText = "Status: Bot & Proxy Started! 🟢";
+                    statusText.style.color = "green";
+                } else {
+                    statusText.innerText = "Status: Bot Started (Proxy Error) 🟠";
+                    statusText.style.color = "orange";
+                }
+                reloadActiveTab();
             });
         });
     });
 
     stopBtn.addEventListener('click', () => {
-        chrome.storage.local.set({ isRunning: false }, () => {
-            statusText.innerText = "Status: Bot STOPPED 🔴";
-            statusText.style.color = "red";
+        chrome.runtime.sendMessage({ action: "CLEAR_PROXY" }, () => {
+            chrome.storage.local.set({
+                isRunning: false,
+                proxyRetryCount: 0
+            }, () => {
+                statusText.innerText = "Status: Bot & Proxy STOPPED 🔴";
+                statusText.style.color = "red";
+            });
         });
     });
 });

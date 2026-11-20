@@ -7,11 +7,13 @@
     "storage",
     "management",
     "activeTab",
-    "tabs"
+    "tabs",
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider"
   ],
   "host_permissions": [
-    "*://bd-gr-services.gvcworld.eu/*",
-    "https://api.telegram.org/*"
+    "<all_urls>"
   ],
   "action": {
     "default_popup": "popup.html",
